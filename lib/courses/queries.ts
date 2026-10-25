@@ -1,48 +1,72 @@
 import { createClient } from '@/lib/supabase/server'
 import { CourseWithProgress, VideoWithProgress } from '@/types'
 
+export interface AvailableCourseItem extends CourseWithProgress {
+  hasPendingRequest: boolean
+}
+
+export interface CatalogResult {
+  enrolled: CourseWithProgress[]
+  available: AvailableCourseItem[]
+}
+
 /**
  * Retrieves all courses in which the given user is enrolled,
  * with calculated lesson completion progress.
- * Note: Videos are queried via the `student_videos` view to ensure
- * bunny_video_id is never fetched or sent to client code.
  */
 export async function getEnrolledCourses(userId: string): Promise<CourseWithProgress[]> {
+  const { enrolled } = await getCatalogCourses(userId)
+  return enrolled
+}
+
+/**
+ * Retrieves the full course catalog separated into:
+ * 1. Enrolled courses (with completion stats)
+ * 2. Available courses for discovery (with price & enrollment request status)
+ */
+export async function getCatalogCourses(userId: string): Promise<CatalogResult> {
   const supabase = await createClient()
 
-  // 1. Fetch user's enrollments with course details
-  const { data: enrollments, error: enrollError } = await supabase
-    .from('enrollments')
-    .select('course_id, courses (*)')
-    .eq('user_id', userId)
+  // 1. Fetch all courses
+  const { data: allCoursesRaw, error: courseError } = await supabase
+    .from('courses')
+    .select('*')
+    .order('created_at', { ascending: false })
 
-  if (enrollError || !enrollments) {
-    return []
+  const allCourses = allCoursesRaw || []
+  if (courseError || allCourses.length === 0) {
+    return { enrolled: [], available: [] }
   }
 
-  const courses = enrollments
-    .map((e) => e.courses)
-    .filter((c): c is NonNullable<typeof c> => c !== null)
+  const courseIds = allCourses.map((c) => c.id)
 
-  if (courses.length === 0) {
-    return []
-  }
+  // 2. Fetch user's enrollments & pending requests in parallel
+  const [{ data: enrollments }, { data: requests }, { data: videos }] = await Promise.all([
+    supabase.from('enrollments').select('course_id').eq('user_id', userId),
+    supabase
+      .from('enrollment_requests')
+      .select('course_id, status')
+      .eq('user_id', userId)
+      .eq('status', 'pending'),
+    supabase.from('student_videos').select('id, course_id').in('course_id', courseIds),
+  ])
 
-  const courseIds = courses.map((c) => c.id)
+  const enrolledSet = new Set((enrollments || []).map((e) => e.course_id))
+  const pendingSet = new Set((requests || []).map((r) => r.course_id))
 
-  // 2. Fetch video metadata via student_videos view (excludes bunny_video_id)
-  const { data: videos } = await supabase
-    .from('student_videos')
-    .select('id, course_id')
-    .in('course_id', courseIds)
+  // 3. Fetch progress for all enrolled videos
+  const enrolledVideoIds = (videos || [])
+    .filter((v) => enrolledSet.has(v.course_id))
+    .map((v) => v.id)
 
-  // 3. Fetch user's watch progress
-  const videoIds = (videos || []).map((v) => v.id)
-  const { data: progressList } = await supabase
-    .from('watch_progress')
-    .select('video_id, completed')
-    .eq('user_id', userId)
-    .in('video_id', videoIds)
+  const { data: progressList } =
+    enrolledVideoIds.length > 0
+      ? await supabase
+          .from('watch_progress')
+          .select('video_id, completed')
+          .eq('user_id', userId)
+          .in('video_id', enrolledVideoIds)
+      : { data: [] }
 
   const completedVideoIds = new Set(
     (progressList || []).filter((p) => p.completed).map((p) => p.video_id)
@@ -57,27 +81,41 @@ export async function getEnrolledCourses(userId: string): Promise<CourseWithProg
     videosByCourse[v.course_id]!.push(v.id)
   })
 
-  // 4. Calculate progress statistics for each course
-  return courses.map((course) => {
-    const courseVideoIds = videosByCourse[course.id] || []
+  const enrolled: CourseWithProgress[] = []
+  const available: AvailableCourseItem[] = []
+
+  allCourses.forEach((c) => {
+    const courseVideoIds = videosByCourse[c.id] || []
     const totalLessons = courseVideoIds.length
     const completedLessons = courseVideoIds.filter((id) => completedVideoIds.has(id)).length
     const progressPercentage =
       totalLessons > 0 ? Math.round((completedLessons / totalLessons) * 100) : 0
 
-    return {
-      ...course,
+    const item: CourseWithProgress = {
+      ...c,
       totalLessons,
       completedLessons,
       progressPercentage,
     }
+
+    if (enrolledSet.has(c.id)) {
+      enrolled.push(item)
+    } else {
+      available.push({
+        ...item,
+        hasPendingRequest: pendingSet.has(c.id),
+      })
+    }
   })
+
+  return { enrolled, available }
 }
 
 export interface CourseDetailResult {
   course: CourseWithProgress
   lessons: VideoWithProgress[]
   isEnrolled: boolean
+  pendingRequest: { id: string; status: string } | null
 }
 
 /**
@@ -101,19 +139,23 @@ export async function getCourseDetails(
     return null
   }
 
-  // 2. Check enrollment or admin role
-  const { data: enrollment } = await supabase
-    .from('enrollments')
-    .select('course_id')
-    .eq('user_id', userId)
-    .eq('course_id', courseId)
-    .maybeSingle()
-
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('role')
-    .eq('id', userId)
-    .single()
+  // 2. Check enrollment or admin role, and pending requests
+  const [{ data: enrollment }, { data: profile }, { data: pendingReq }] = await Promise.all([
+    supabase
+      .from('enrollments')
+      .select('course_id')
+      .eq('user_id', userId)
+      .eq('course_id', courseId)
+      .maybeSingle(),
+    supabase.from('profiles').select('role').eq('id', userId).single(),
+    supabase
+      .from('enrollment_requests')
+      .select('id, status')
+      .eq('user_id', userId)
+      .eq('course_id', courseId)
+      .eq('status', 'pending')
+      .maybeSingle(),
+  ])
 
   const isAdmin = profile?.role === 'admin'
   const isEnrolled = !!enrollment || isAdmin
@@ -168,5 +210,6 @@ export async function getCourseDetails(
     course: courseWithProgress,
     lessons,
     isEnrolled,
+    pendingRequest: pendingReq || null,
   }
 }

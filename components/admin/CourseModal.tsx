@@ -17,6 +17,7 @@ export function CourseModal({ course, isOpen, onClose }: CourseModalProps) {
   const [title, setTitle] = useState(course?.title || '')
   const [description, setDescription] = useState(course?.description || '')
   const [thumbnail, setThumbnail] = useState(course?.thumbnail || '')
+  const [priceInr, setPriceInr] = useState<number>(course?.price_inr ?? 4999)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -33,6 +34,7 @@ export function CourseModal({ course, isOpen, onClose }: CourseModalProps) {
           title,
           description,
           thumbnail,
+          price_inr: priceInr,
         })
         if (!res.success) {
           setError(res.error || 'Failed to update course')
@@ -44,6 +46,7 @@ export function CourseModal({ course, isOpen, onClose }: CourseModalProps) {
           title,
           description,
           thumbnail,
+          price_inr: priceInr,
         })
         if (!res.success) {
           setError(res.error || 'Failed to create course')
@@ -161,6 +164,27 @@ export function CourseModal({ course, isOpen, onClose }: CourseModalProps) {
               </div>
             </div>
           )}
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
+              Course Tuition Price (INR ₹)
+            </label>
+            <div className="relative">
+              <input
+                type="number"
+                min="0"
+                step="1"
+                value={priceInr}
+                onChange={(e) => setPriceInr(parseInt(e.target.value, 10) || 0)}
+                placeholder="4999"
+                className="w-full pl-8 pr-3.5 py-2.5 rounded-xl border border-slate-300 bg-white text-slate-900 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-amber-400"
+              />
+              <span className="absolute left-3 top-2.5 text-slate-400 font-bold">₹</span>
+            </div>
+            <p className="text-[11px] text-slate-500 mt-1">
+              Enter 0 for free enrollment, or set the price for Razorpay and UPI checkout.
+            </p>
+          </div>
 
           <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
             <button

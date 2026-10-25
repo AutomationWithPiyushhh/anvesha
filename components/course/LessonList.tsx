@@ -1,10 +1,11 @@
 import Link from 'next/link'
 import { VideoWithProgress } from '@/types'
-import { Play, CheckCircle2, Clock } from 'lucide-react'
+import { Play, CheckCircle2, Clock, Lock } from 'lucide-react'
 
 interface LessonListProps {
   lessons: VideoWithProgress[]
   courseId?: string
+  isEnrolled?: boolean
 }
 
 function formatDuration(seconds: number): string {
@@ -14,7 +15,7 @@ function formatDuration(seconds: number): string {
   return `${mins}:${secs.toString().padStart(2, '0')}`
 }
 
-export function LessonList({ lessons }: LessonListProps) {
+export function LessonList({ lessons, isEnrolled = true }: LessonListProps) {
   if (lessons.length === 0) {
     return (
       <div className="glass-card p-8 rounded-2xl text-center">
@@ -30,6 +31,35 @@ export function LessonList({ lessons }: LessonListProps) {
     <div className="space-y-3">
       {lessons.map((lesson, idx) => {
         const lessonNumber = (lesson.order || idx + 1).toString().padStart(2, '0')
+
+        if (!isEnrolled) {
+          return (
+            <div
+              key={lesson.id}
+              className="glass-card p-4 sm:p-5 rounded-2xl flex items-center justify-between border border-slate-200/80 bg-white/70"
+            >
+              <div className="flex items-center gap-4">
+                <div className="w-10 h-10 rounded-xl flex items-center justify-center font-bold text-xs bg-slate-100 text-slate-400 border border-slate-200 shrink-0">
+                  <span>{lessonNumber}</span>
+                </div>
+                <div>
+                  <h4 className="font-semibold text-sm sm:text-base text-slate-800 line-clamp-1">
+                    {lesson.title}
+                  </h4>
+                  <div className="flex items-center gap-2 text-xs text-slate-400 mt-0.5">
+                    <Clock className="w-3.5 h-3.5" />
+                    <span>{formatDuration(lesson.duration)}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-100 text-slate-500 text-xs font-medium shrink-0">
+                <Lock className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Locked</span>
+              </div>
+            </div>
+          )
+        }
 
         return (
           <Link

@@ -9,6 +9,7 @@ const CourseSchema = z.object({
   title: z.string().min(3, 'Title must be at least 3 characters'),
   description: z.string().min(5, 'Description must be at least 5 characters'),
   thumbnail: z.string().min(1, 'Thumbnail URL is required'),
+  price_inr: z.coerce.number().int().min(0).default(0),
 })
 
 const LessonSchema = z.object({
@@ -37,6 +38,7 @@ export async function createCourseAction(data: {
   title: string
   description: string
   thumbnail: string
+  price_inr?: number
 }) {
   try {
     await requireAdmin()
@@ -49,6 +51,7 @@ export async function createCourseAction(data: {
         title: validated.title.trim(),
         description: validated.description.trim(),
         thumbnail: validated.thumbnail.trim(),
+        price_inr: validated.price_inr,
       })
       .select()
       .single()
@@ -72,6 +75,7 @@ export async function updateCourseAction(
     title: string
     description: string
     thumbnail: string
+    price_inr?: number
   }
 ) {
   try {
@@ -85,6 +89,7 @@ export async function updateCourseAction(
         title: validated.title.trim(),
         description: validated.description.trim(),
         thumbnail: validated.thumbnail.trim(),
+        price_inr: validated.price_inr,
       })
       .eq('id', courseId)
 

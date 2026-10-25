@@ -41,6 +41,8 @@ export interface Database {
           title: string
           description: string
           thumbnail: string
+          price_inr: number
+          is_published: boolean
           created_at: string
         }
         Insert: {
@@ -48,6 +50,8 @@ export interface Database {
           title: string
           description: string
           thumbnail: string
+          price_inr?: number
+          is_published?: boolean
           created_at?: string
         }
         Update: {
@@ -55,6 +59,8 @@ export interface Database {
           title?: string
           description?: string
           thumbnail?: string
+          price_inr?: number
+          is_published?: boolean
           created_at?: string
         }
         Relationships: []
@@ -308,6 +314,57 @@ export interface Database {
           },
           {
             foreignKeyName: "certificates_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          }
+        ]
+      }
+      enrollment_requests: {
+        Row: {
+          id: string
+          user_id: string
+          course_id: string
+          status: 'pending' | 'approved' | 'rejected'
+          payment_method: string
+          transaction_ref: string | null
+          notes: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          course_id: string
+          status?: 'pending' | 'approved' | 'rejected'
+          payment_method?: string
+          transaction_ref?: string | null
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          course_id?: string
+          status?: 'pending' | 'approved' | 'rejected'
+          payment_method?: string
+          transaction_ref?: string | null
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "enrollment_requests_course_id_fkey"
+            columns: ["course_id"]
+            isOneToOne: false
+            referencedRelation: "courses"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "enrollment_requests_user_id_fkey"
             columns: ["user_id"]
             isOneToOne: false
             referencedRelation: "profiles"

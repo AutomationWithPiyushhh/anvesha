@@ -58,6 +58,13 @@ export default async function AdminLayout({ children }: { children: ReactNode })
                   <Users className="w-4 h-4 text-slate-500" />
                   Students & Devices
                 </Link>
+                <Link
+                  href="/admin/requests"
+                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium text-slate-700 hover:text-slate-900 hover:bg-slate-100 transition-colors"
+                >
+                  <ShieldCheck className="w-4 h-4 text-amber-600" />
+                  Enrollment Requests
+                </Link>
               </nav>
             </div>
 
@@ -99,6 +106,13 @@ export default async function AdminLayout({ children }: { children: ReactNode })
           >
             <Users className="w-3.5 h-3.5" />
             Students
+          </Link>
+          <Link
+            href="/admin/requests"
+            className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-slate-700 hover:text-slate-900"
+          >
+            <ShieldCheck className="w-3.5 h-3.5 text-amber-600" />
+            Requests
           </Link>
         </div>
       </header>
