@@ -45,7 +45,7 @@ export function EnrollmentCheckoutModal({
   const isFree = !priceInr || priceInr <= 0
 
   // If free, we don't need payment tabs
-  const [tab, setTab] = useState<'upi' | 'razorpay'>('upi')
+  const [tab, setTab] = useState<'upi' | 'razorpay'>('razorpay')
 
   // Free enrollment state
   const [enrollingFree, setEnrollingFree] = useState(false)
@@ -341,20 +341,8 @@ export function EnrollmentCheckoutModal({
         ) : (
           /* ================= OPTION B: PAID COURSE (UPI or RAZORPAY) ================= */
           <div className="space-y-6">
-            {/* Tabs: Direct UPI Request vs Instant Online */}
+            {/* Tabs: Instant Online vs Direct UPI Request */}
             <div className="grid grid-cols-2 p-1 bg-slate-100 rounded-2xl gap-1">
-              <button
-                onClick={() => setTab('upi')}
-                className={`py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all ${
-                  tab === 'upi'
-                    ? 'bg-white text-slate-900 shadow-sm'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                <QrCode className="w-4 h-4 text-amber-500" />
-                <span>Manual UPI / Approval</span>
-              </button>
-
               <button
                 onClick={() => setTab('razorpay')}
                 className={`py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all ${
@@ -365,6 +353,18 @@ export function EnrollmentCheckoutModal({
               >
                 <CreditCard className="w-4 h-4 text-amber-500" />
                 <span>Instant Online (Card / UPI)</span>
+              </button>
+
+              <button
+                onClick={() => setTab('upi')}
+                className={`py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all ${
+                  tab === 'upi'
+                    ? 'bg-white text-slate-900 shadow-sm'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <QrCode className="w-4 h-4 text-amber-500" />
+                <span>Manual UPI / Approval</span>
               </button>
             </div>
 
