@@ -367,6 +367,7 @@ export function SecurePlayer({
           <iframe
             src={embedUrl}
             loading="lazy"
+            referrerPolicy="no-referrer"
             className="w-full h-full border-0 absolute inset-0"
             allow="accelerometer;gyroscope;autoplay;encrypted-media;picture-in-picture;"
             allowFullScreen={true}

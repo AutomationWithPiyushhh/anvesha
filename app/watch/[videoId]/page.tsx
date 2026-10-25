@@ -1,4 +1,5 @@
 import { redirect, notFound } from 'next/navigation'
+import { connection } from 'next/server'
 import Link from 'next/link'
 import { getCurrentProfile } from '@/lib/auth/session'
 import { createClient } from '@/lib/supabase/server'
@@ -27,6 +28,7 @@ export default async function WatchPage({
 }: {
   params: Promise<{ videoId: string }>
 }) {
+  await connection()
   const { videoId } = await params
   const profile = await getCurrentProfile()
 

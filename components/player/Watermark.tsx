@@ -13,9 +13,11 @@ function getRandomCoords() {
   return { top: `${randomTop}%`, left: `${randomLeft}%` }
 }
 
+const INITIAL_COORDS = { top: '30%', left: '30%' }
+
 export function Watermark({ email, containerRef }: WatermarkProps) {
-  // Lazy initialization of random starting coordinates (no synchronous setState in effect)
-  const [position, setPosition] = useState(getRandomCoords)
+  // Static initial coordinates prevent server-client SSR hydration mismatch
+  const [position, setPosition] = useState(INITIAL_COORDS)
   const watermarkRef = useRef<HTMLDivElement | null>(null)
   const isSelfMutating = useRef(false)
 
@@ -24,9 +26,17 @@ export function Watermark({ email, containerRef }: WatermarkProps) {
   }, [])
 
   useEffect(() => {
+    // Randomize position asynchronously after mount
+    const initialTimer = setTimeout(() => {
+      setPosition(getRandomCoords())
+    }, 50)
+
     // Drift to random position every 22 seconds
     const interval = setInterval(randomizePosition, 22000)
-    return () => clearInterval(interval)
+    return () => {
+      clearTimeout(initialTimer)
+      clearInterval(interval)
+    }
   }, [randomizePosition])
 
   // Anti-tamper MutationObserver: guards against devtools removal or style hiding
