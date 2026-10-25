@@ -15,7 +15,7 @@ interface EnrollButtonProps {
 export function EnrollButton({
   courseId,
   courseTitle,
-  priceInr = 4999,
+  priceInr = 0,
   hasPendingRequest = false,
   className = '',
 }: EnrollButtonProps) {

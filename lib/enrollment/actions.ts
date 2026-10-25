@@ -119,6 +119,54 @@ export async function getStudentCourseRequest(courseId: string, userId: string) 
 }
 
 /**
+ * Direct 1-click enrollment for Free courses (price_inr === 0)
+ */
+export async function enrollFreeCourseAction(courseId: string) {
+  try {
+    const profile = await getCurrentProfile()
+    if (!profile) {
+      return { success: false, error: 'Unauthorized: Please log in' }
+    }
+
+    const adminSupabase = createAdminClient()
+
+    // 1. Check if course exists
+    const { data: course, error: courseError } = await adminSupabase
+      .from('courses')
+      .select('id')
+      .eq('id', courseId)
+      .single()
+
+    if (courseError || !course) {
+      return { success: false, error: 'Course not found' }
+    }
+
+    // 2. Grant enrollment
+    const { error: enrollError } = await adminSupabase
+      .from('enrollments')
+      .upsert(
+        {
+          user_id: profile.id,
+          course_id: courseId,
+          granted_at: new Date().toISOString(),
+        },
+        { onConflict: 'user_id, course_id' }
+      )
+
+    if (enrollError) {
+      return { success: false, error: enrollError.message }
+    }
+
+    revalidatePath(`/courses/${courseId}`)
+    revalidatePath('/dashboard')
+    return { success: true }
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : 'Failed to enroll in free course'
+    return { success: false, error: msg }
+  }
+}
+
+/**
  * Admin: Get all pending enrollment requests
  */
 export async function getAdminEnrollmentRequests(): Promise<EnrollmentRequestItem[]> {
@@ -134,7 +182,7 @@ export async function getAdminEnrollmentRequests(): Promise<EnrollmentRequestIte
       .select(`
         *,
         user:profiles(name, email),
-        course:courses(title, price_inr)
+        course:courses(title)
       `)
       .order('created_at', { ascending: false })
 

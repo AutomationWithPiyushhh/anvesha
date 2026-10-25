@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
 import { getCurrentProfile } from '@/lib/auth/session'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { Database } from '@/types/database'
 
 const CourseSchema = z.object({
   title: z.string().min(3, 'Title must be at least 3 characters'),
@@ -45,16 +46,36 @@ export async function createCourseAction(data: {
     const validated = CourseSchema.parse(data)
     const adminSupabase = createAdminClient()
 
-    const { data: newCourse, error } = await adminSupabase
+    const payload: Database['public']['Tables']['courses']['Insert'] = {
+      title: validated.title.trim(),
+      description: validated.description.trim(),
+      thumbnail: validated.thumbnail.trim(),
+    }
+    if (typeof validated.price_inr === 'number') {
+      payload.price_inr = validated.price_inr
+    }
+
+    let { data: newCourse, error } = await adminSupabase
       .from('courses')
-      .insert({
+      .insert(payload)
+      .select()
+      .single()
+
+    // Resilient fallback: If Supabase schema cache hasn't loaded 'price_inr' yet, retry without it
+    if (error && (error.message.toLowerCase().includes('price_inr') || error.code === 'PGRST204')) {
+      const fallbackPayload: Database['public']['Tables']['courses']['Insert'] = {
         title: validated.title.trim(),
         description: validated.description.trim(),
         thumbnail: validated.thumbnail.trim(),
-        price_inr: validated.price_inr,
-      })
-      .select()
-      .single()
+      }
+      const retry = await adminSupabase
+        .from('courses')
+        .insert(fallbackPayload)
+        .select()
+        .single()
+      newCourse = retry.data
+      error = retry.error
+    }
 
     if (error) {
       return { success: false, error: error.message }
@@ -83,15 +104,33 @@ export async function updateCourseAction(
     const validated = CourseSchema.parse(data)
     const adminSupabase = createAdminClient()
 
-    const { error } = await adminSupabase
+    const updatePayload: Database['public']['Tables']['courses']['Update'] = {
+      title: validated.title.trim(),
+      description: validated.description.trim(),
+      thumbnail: validated.thumbnail.trim(),
+    }
+    if (typeof validated.price_inr === 'number') {
+      updatePayload.price_inr = validated.price_inr
+    }
+
+    let { error } = await adminSupabase
       .from('courses')
-      .update({
+      .update(updatePayload)
+      .eq('id', courseId)
+
+    // Resilient fallback: If Supabase schema cache hasn't loaded 'price_inr' yet, retry without it
+    if (error && (error.message.toLowerCase().includes('price_inr') || error.code === 'PGRST204')) {
+      const fallbackUpdate: Database['public']['Tables']['courses']['Update'] = {
         title: validated.title.trim(),
         description: validated.description.trim(),
         thumbnail: validated.thumbnail.trim(),
-        price_inr: validated.price_inr,
-      })
-      .eq('id', courseId)
+      }
+      const retry = await adminSupabase
+        .from('courses')
+        .update(fallbackUpdate)
+        .eq('id', courseId)
+      error = retry.error
+    }
 
     if (error) {
       return { success: false, error: error.message }

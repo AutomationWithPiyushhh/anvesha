@@ -1,6 +1,7 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { Course } from '@/types'
 import { createCourseAction, updateCourseAction } from '@/lib/admin/actions'
 import { X, Plus, Edit2, Loader2, Image as ImageIcon } from 'lucide-react'
@@ -13,15 +14,51 @@ interface CourseModalProps {
 
 export function CourseModal({ course, isOpen, onClose }: CourseModalProps) {
   const isEditing = Boolean(course)
+  const [mounted, setMounted] = useState(false)
 
   const [title, setTitle] = useState(course?.title || '')
   const [description, setDescription] = useState(course?.description || '')
   const [thumbnail, setThumbnail] = useState(course?.thumbnail || '')
-  const [priceInr, setPriceInr] = useState<number>(course?.price_inr ?? 4999)
+  const [priceInr, setPriceInr] = useState<number>(course?.price_inr ?? 0)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  if (!isOpen) return null
+  useEffect(() => {
+    setMounted(true)
+  }, [])
+
+  useEffect(() => {
+    if (course) {
+      setTitle(course.title || '')
+      setDescription(course.description || '')
+      setThumbnail(course.thumbnail || '')
+      setPriceInr(course.price_inr ?? 0)
+    } else {
+      setTitle('')
+      setDescription('')
+      setThumbnail('')
+      setPriceInr(0)
+    }
+    setError(null)
+  }, [course, isOpen])
+
+  // Close on Escape key & lock scroll
+  useEffect(() => {
+    if (!isOpen) return
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    document.body.style.overflow = 'hidden'
+
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown)
+      document.body.style.overflow = 'unset'
+    }
+  }, [isOpen, onClose])
+
+  if (!isOpen || !mounted) return null
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -63,9 +100,15 @@ export function CourseModal({ course, isOpen, onClose }: CourseModalProps) {
     }
   }
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
-      <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 space-y-5">
+  const modalContent = (
+    <div
+      className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200"
+      onClick={onClose}
+    >
+      <div
+        className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 space-y-5 animate-in zoom-in-95 duration-200"
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* Header */}
         <div className="flex items-center justify-between pb-3 border-b border-slate-100">
           <div className="flex items-center gap-2">
@@ -85,7 +128,7 @@ export function CourseModal({ course, isOpen, onClose }: CourseModalProps) {
         </div>
 
         {error && (
-          <div className="p-3 text-xs rounded-xl bg-rose-50 text-rose-700 border border-rose-200">
+          <div className="p-3 text-xs rounded-xl bg-rose-50 text-rose-700 border border-rose-200 leading-relaxed">
             {error}
           </div>
         )}
@@ -176,7 +219,7 @@ export function CourseModal({ course, isOpen, onClose }: CourseModalProps) {
                 step="1"
                 value={priceInr}
                 onChange={(e) => setPriceInr(parseInt(e.target.value, 10) || 0)}
-                placeholder="4999"
+                placeholder="0"
                 className="w-full pl-8 pr-3.5 py-2.5 rounded-xl border border-slate-300 bg-white text-slate-900 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-amber-400"
               />
               <span className="absolute left-3 top-2.5 text-slate-400 font-bold">₹</span>
@@ -208,4 +251,6 @@ export function CourseModal({ course, isOpen, onClose }: CourseModalProps) {
       </div>
     </div>
   )
+
+  return createPortal(modalContent, document.body)
 }

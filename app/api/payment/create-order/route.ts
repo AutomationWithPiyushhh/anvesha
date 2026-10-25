@@ -15,14 +15,23 @@ export async function POST(req: NextRequest) {
     }
 
     const adminSupabase = createAdminClient()
-    const { data: course, error: courseError } = await adminSupabase
+    const { data: courseRaw, error: courseError } = await adminSupabase
       .from('courses')
-      .select('id, title, price_inr')
+      .select('*')
       .eq('id', courseId)
       .single()
 
-    if (courseError || !course) {
+    if (courseError || !courseRaw) {
       return NextResponse.json({ error: 'Course not found' }, { status: 404 })
+    }
+
+    const course = courseRaw as { id: string; title: string; price_inr?: number }
+
+    if (typeof course.price_inr === 'number' && course.price_inr <= 0) {
+      return NextResponse.json({
+        configured: false,
+        error: 'This course is free. Please click "Claim Free Access" to enroll instantly.',
+      })
     }
 
     const keyId = process.env.RAZORPAY_KEY_ID
