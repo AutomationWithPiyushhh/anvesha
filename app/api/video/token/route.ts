@@ -131,16 +131,17 @@ export async function POST(request: NextRequest) {
     const ttlSeconds = parseInt(process.env.SIGNED_URL_TTL_SECONDS || '3600', 10)
 
     // IP locking can be empty or set depending on network topology; we use default directory token
-    const { signedUrl, expires } = generateBunnyToken({
+    const { signedUrl, embedUrl, expires } = generateBunnyToken({
       bunnyVideoId: video.bunny_video_id,
       expiresInSeconds: ttlSeconds,
       userIp: '', // Avoid breaking mobile networks with dynamic IP shifting
     })
 
-    // Return the authorized HLS playback URL
+    // Return the authorized playback URLs
     return NextResponse.json({
       success: true,
       playbackUrl: signedUrl,
+      embedUrl,
       expires,
       title: video.title,
       duration: video.duration,

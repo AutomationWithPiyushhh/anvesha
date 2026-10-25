@@ -8,23 +8,22 @@ export interface GenerateBunnyTokenOptions {
 
 export interface BunnyTokenResult {
   signedUrl: string
+  embedUrl: string
   expires: number
   token: string
   tokenPath: string
 }
 
 /**
- * Generates an official Bunny CDN path-based directory token URL for HLS video streaming.
- *
- * Format:
- *   https://{BUNNY_CDN_HOSTNAME}/bcdn_token={token}&expires={expires}&token_path={encoded_token_path}/{bunnyVideoId}/playlist.m3u8
- *
- * Official Bunny CDN Signing Scheme:
- * 1. Directory token path: `/${bunnyVideoId}/` (ending with slash, covering playlists & segments).
- * 2. Hashable string includes security_key + token_path + expires (+ user_ip).
- * 3. Hashed using SHA-256 and formatted as Base64URL (no padding, url-safe).
- * 4. Embedded as a path-based prefix (/bcdn_token=...) so all relative .ts segments and child playlists
- *    automatically inherit the directory authorization without query string rewriting.
+ * Generates official Bunny Stream token authentication URLs.
+ * 
+ * 1. embedUrl: Bunny Stream secure tokenized embed URL
+ *    Format: https://iframe.mediadelivery.net/embed/{libraryId}/{bunnyVideoId}?token={token}&expires={expires}
+ *    Algorithm: SHA256_HEX(security_key + bunnyVideoId + expires)
+ * 
+ * 2. signedUrl: Direct HLS streaming URL
+ *    Format: https://{cdnHostname}/{bunnyVideoId}/playlist.m3u8?token={token}&expires={expires}
+ *    Algorithm: SHA256_BASE64URL(security_key + '/{bunnyVideoId}/playlist.m3u8' + expires)
  */
 export function generateBunnyToken({
   bunnyVideoId,
@@ -33,26 +32,32 @@ export function generateBunnyToken({
 }: GenerateBunnyTokenOptions): BunnyTokenResult {
   const securityKey = process.env.BUNNY_TOKEN_KEY
   const cdnHostname = process.env.BUNNY_CDN_HOSTNAME
+  const libraryId = process.env.BUNNY_LIBRARY_ID || ''
 
   if (!securityKey || !cdnHostname) {
     throw new Error('Missing BUNNY_TOKEN_KEY or BUNNY_CDN_HOSTNAME environment variable')
   }
 
-  // Token path covering the entire directory for the video
   const tokenPath = `/${bunnyVideoId}/`
   const expires = Math.floor(Date.now() / 1000) + expiresInSeconds
 
-  // Official Bunny CDN hashable base string with token_path included
-  const hashable = securityKey + tokenPath + expires + (userIp || '')
-  const hash = crypto.createHash('sha256').update(hashable).digest('base64')
-  const token = hash.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+  // 1. Direct HLS token (SHA256 Base64URL)
+  const hlsPath = `/${bunnyVideoId}/playlist.m3u8`
+  const hashableHls = securityKey + hlsPath + expires + (userIp || '')
+  const hashHls = crypto.createHash('sha256').update(hashableHls).digest('base64')
+  const token = hashHls.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+  const signedUrl = `https://${cdnHostname}${hlsPath}?token=${token}&expires=${expires}`
 
-  // Path-based directory token format (NOT a plain ?token= query string)
-  const tokenPrefix = `bcdn_token=${token}&expires=${expires}&token_path=${encodeURIComponent(tokenPath)}`
-  const signedUrl = `https://${cdnHostname}/${tokenPrefix}/${bunnyVideoId}/playlist.m3u8`
+  // 2. Bunny Stream Embed token (SHA256 Hex)
+  const hashableEmbed = securityKey + bunnyVideoId + expires
+  const embedToken = crypto.createHash('sha256').update(hashableEmbed).digest('hex')
+  const embedUrl = libraryId
+    ? `https://iframe.mediadelivery.net/embed/${libraryId}/${bunnyVideoId}?token=${embedToken}&expires=${expires}&autoplay=true`
+    : ''
 
   return {
     signedUrl,
+    embedUrl,
     expires,
     token,
     tokenPath,
@@ -60,7 +65,7 @@ export function generateBunnyToken({
 }
 
 /**
- * Resolves relative child playlist or segment URLs to verify that segments inherit the directory token.
+ * Resolves relative child playlist or segment URLs.
  */
 export function resolveSegmentUrl(basePlaylistUrl: string, relativeSegmentPath: string): string {
   const url = new URL(basePlaylistUrl)

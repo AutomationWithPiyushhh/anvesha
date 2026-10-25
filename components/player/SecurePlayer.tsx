@@ -38,6 +38,7 @@ export function SecurePlayer({
 
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [embedUrl, setEmbedUrl] = useState<string | null>(null)
   const [isPlaying, setIsPlaying] = useState(false)
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
@@ -52,7 +53,7 @@ export function SecurePlayer({
   const hasResumedInitial = useRef(false)
   const tokenExpiresAt = useRef<number | null>(null)
 
-  // 1. Attach HLS stream to video tag
+  // 1. Attach HLS stream to video tag (for direct HLS mode)
   const loadHlsStream = useCallback(
     (playbackUrl: string) => {
       const video = videoRef.current
@@ -91,6 +92,7 @@ export function SecurePlayer({
               default:
                 hls.destroy()
                 setError('Failed to load video stream. Please retry.')
+                setLoading(false)
                 break
             }
           }
@@ -115,7 +117,7 @@ export function SecurePlayer({
     [initialPositionSeconds]
   )
 
-  // 2. Fetch authorized HLS playback token from server route
+  // 2. Fetch authorized playback token from server route
   const fetchVideoToken = useCallback(async () => {
     setLoading(true)
     setError(null)
@@ -139,7 +141,13 @@ export function SecurePlayer({
       tokenExpiresAt.current = data.expires
       setPlaybackStartedAt(data.playbackStartedAt)
 
-      loadHlsStream(data.playbackUrl)
+      // Use secure Bunny Stream Embed if available (handles DRM & segment token authorization)
+      if (data.embedUrl) {
+        setEmbedUrl(data.embedUrl)
+        setLoading(false)
+      } else if (data.playbackUrl) {
+        loadHlsStream(data.playbackUrl)
+      }
     } catch {
       setError('An unexpected network error occurred while initializing the secure player.')
       setLoading(false)
@@ -170,7 +178,13 @@ export function SecurePlayer({
 
         tokenExpiresAt.current = data.expires
         setPlaybackStartedAt(data.playbackStartedAt)
-        loadHlsStream(data.playbackUrl)
+
+        if (data.embedUrl) {
+          setEmbedUrl(data.embedUrl)
+          setLoading(false)
+        } else if (data.playbackUrl) {
+          loadHlsStream(data.playbackUrl)
+        }
       } catch {
         if (isMounted) {
           setError('An unexpected network error occurred while initializing the secure player.')
@@ -189,40 +203,34 @@ export function SecurePlayer({
     }
   }, [videoId, loadHlsStream])
 
-  // 3. Save progress to /api/progress
+  // Save student progress to server
   const saveProgress = useCallback(
-    async (posSeconds: number, markCompleted: boolean) => {
-      if (Math.abs(posSeconds - lastSavedPosition.current) < 2 && !markCompleted) {
-        return
-      }
-
-      lastSavedPosition.current = posSeconds
-
+    async (seconds: number, markCompleted = false) => {
       try {
         await fetch('/api/progress', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             videoId,
-            positionSeconds: Math.floor(posSeconds),
+            positionSeconds: Math.floor(seconds),
             completed: markCompleted,
           }),
         })
 
         if (markCompleted) {
           setIsMarkedCompleted(true)
-          onCompleted?.()
+          if (onCompleted) onCompleted()
         }
       } catch {
-        // Quietly handle transient save error
+        // Silently tolerate background progress network dropouts
       }
     },
     [videoId, onCompleted]
   )
 
-  // 4. Active heartbeat every 30s: enforces single active playback per user
+  // 30-Second Heartbeat & Concurrency Detection Loop
   useEffect(() => {
-    if (!isPlaying || !playbackStartedAt) return
+    if (!playbackStartedAt) return
 
     const interval = setInterval(async () => {
       try {
@@ -237,138 +245,58 @@ export function SecurePlayer({
 
         const data = await res.json()
 
-        if (data.status === 'stopped') {
-          // Pause player immediately
-          videoRef.current?.pause()
-          setIsPlaying(false)
+        if (data.stopped) {
           setStoppedReason(
-            data.message || 'Playback stopped: another session started on another device.'
+            data.reason || 'Playback paused because a newer session was started on your account.'
           )
+          if (videoRef.current) {
+            videoRef.current.pause()
+          }
         }
       } catch {
-        // Transient network issue
+        // Background heartbeat failure handled silently
       }
     }, 30000)
 
     return () => clearInterval(interval)
-  }, [isPlaying, videoId, playbackStartedAt])
+  }, [videoId, playbackStartedAt])
 
-  // 5. Save position every 10 seconds while playing & check ~90% completion
-  useEffect(() => {
-    if (!isPlaying) return
+  // Progress timeupdate handler for native player
+  const handleTimeUpdate = () => {
+    const video = videoRef.current
+    if (!video) return
 
-    const interval = setInterval(() => {
-      const video = videoRef.current
-      if (!video) return
+    const now = video.currentTime
+    const total = video.duration || 0
 
-      const curr = video.currentTime
-      const dur = video.duration || duration
+    setCurrentTime(now)
+    setDuration(total)
 
-      const is90Percent = dur > 0 && curr / dur >= 0.9
-      const shouldComplete = is90Percent && !isMarkedCompleted
-
-      saveProgress(curr, shouldComplete || isMarkedCompleted)
-    }, 10000)
-
-    return () => clearInterval(interval)
-  }, [isPlaying, duration, isMarkedCompleted, saveProgress])
-
-  // Save on pause or page unload
-  useEffect(() => {
-    const handleUnload = () => {
-      if (videoRef.current) {
-        navigator.sendBeacon(
-          '/api/progress',
-          JSON.stringify({
-            videoId,
-            positionSeconds: Math.floor(videoRef.current.currentTime),
-            completed: isMarkedCompleted,
-          })
-        )
-      }
+    // Save progress periodically every 10 seconds
+    if (Math.abs(now - lastSavedPosition.current) >= 10) {
+      lastSavedPosition.current = now
+      saveProgress(now, isMarkedCompleted)
     }
 
-    window.addEventListener('beforeunload', handleUnload)
-    return () => window.removeEventListener('beforeunload', handleUnload)
-  }, [videoId, isMarkedCompleted])
-
-  // 6. Transparent token refresh before expiration (~2 mins before)
-  useEffect(() => {
-    if (!tokenExpiresAt.current) return
-
-    const msUntilExpiry = (tokenExpiresAt.current - Math.floor(Date.now() / 1000) - 120) * 1000
-    if (msUntilExpiry <= 0) return
-
-    const timer = setTimeout(() => {
-      fetchVideoToken()
-    }, msUntilExpiry)
-
-    return () => clearTimeout(timer)
-  }, [fetchVideoToken])
-
-  // 7. Custom container fullscreen handling (requirement 6)
-  const toggleFullscreen = () => {
-    const container = containerRef.current
-    if (!container) return
-
-    // iOS detection for CSS pseudo-fullscreen fallback
-    const isIOS =
-      /iPad|iPhone|iPod/.test(navigator.userAgent) ||
-      (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
-
-    if (isIOS) {
-      setIsPseudoFullscreen((prev) => !prev)
-      return
-    }
-
-    if (!document.fullscreenElement) {
-      container.requestFullscreen().catch(() => {
-        setIsPseudoFullscreen(true)
-      })
-    } else {
-      document.exitFullscreen().catch(() => {})
+    // Auto mark completed at 90%
+    if (total > 0 && now / total >= 0.9 && !isMarkedCompleted) {
+      saveProgress(now, true)
     }
   }
 
-  useEffect(() => {
-    const onFsChange = () => {
-      setIsFullscreen(!!document.fullscreenElement)
-    }
-    document.addEventListener('fullscreenchange', onFsChange)
-    return () => document.removeEventListener('fullscreenchange', onFsChange)
-  }, [])
-
-  // Video control helpers
+  // Player control handlers
   const togglePlay = () => {
     const video = videoRef.current
     if (!video) return
 
     if (video.paused) {
-      video.play()
+      video.play().catch(() => {})
       setIsPlaying(true)
     } else {
       video.pause()
       setIsPlaying(false)
       saveProgress(video.currentTime, isMarkedCompleted)
     }
-  }
-
-  const handleTimeUpdate = () => {
-    const video = videoRef.current
-    if (!video) return
-    setCurrentTime(video.currentTime)
-    if (video.duration && !isNaN(video.duration)) {
-      setDuration(video.duration)
-    }
-  }
-
-  const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const video = videoRef.current
-    if (!video) return
-    const newTime = parseFloat(e.target.value)
-    video.currentTime = newTime
-    setCurrentTime(newTime)
-    saveProgress(newTime, isMarkedCompleted)
   }
 
   const toggleMute = () => {
@@ -378,10 +306,50 @@ export function SecurePlayer({
     setIsMuted(video.muted)
   }
 
-  const formatTime = (secs: number) => {
-    if (!secs || isNaN(secs)) return '0:00'
-    const m = Math.floor(secs / 60)
-    const s = Math.floor(secs % 60)
+  const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const video = videoRef.current
+    if (!video) return
+    const target = parseFloat(e.target.value)
+    video.currentTime = target
+    setCurrentTime(target)
+  }
+
+  const toggleFullscreen = () => {
+    const container = containerRef.current
+    if (!container) return
+
+    if (!document.fullscreenElement) {
+      if (container.requestFullscreen) {
+        container.requestFullscreen().catch(() => {
+          setIsPseudoFullscreen(true)
+        })
+      } else {
+        setIsPseudoFullscreen(true)
+      }
+    } else {
+      if (document.exitFullscreen) {
+        document.exitFullscreen()
+      }
+      setIsPseudoFullscreen(false)
+    }
+  }
+
+  useEffect(() => {
+    const handleFsChange = () => {
+      setIsFullscreen(Boolean(document.fullscreenElement))
+      if (!document.fullscreenElement) {
+        setIsPseudoFullscreen(false)
+      }
+    }
+
+    document.addEventListener('fullscreenchange', handleFsChange)
+    return () => document.removeEventListener('fullscreenchange', handleFsChange)
+  }, [])
+
+  function formatTime(seconds: number): string {
+    if (isNaN(seconds) || seconds <= 0) return '0:00'
+    const m = Math.floor(seconds / 60)
+    const s = Math.floor(seconds % 60)
     return `${m}:${s.toString().padStart(2, '0')}`
   }
 
@@ -389,34 +357,119 @@ export function SecurePlayer({
     <div
       ref={containerRef}
       onContextMenu={(e) => e.preventDefault()}
-      className={`relative group bg-black rounded-3xl overflow-hidden aspect-video w-full shadow-2xl select-none ${
-        isPseudoFullscreen
-          ? 'fixed inset-0 z-50 w-screen h-screen rounded-none'
-          : ''
+      className={`relative w-full aspect-video bg-black rounded-3xl overflow-hidden shadow-2xl select-none group border border-slate-800 ${
+        isPseudoFullscreen ? 'fixed inset-0 z-50 rounded-none w-screen h-screen' : ''
       }`}
     >
-      {/* Native Video Tag with security constraints */}
-      <video
-        ref={videoRef}
-        playsInline
-        disablePictureInPicture
-        controlsList="nodownload noremoteplayback nofullscreen"
-        onTimeUpdate={handleTimeUpdate}
-        onPlay={() => setIsPlaying(true)}
-        onPause={() => setIsPlaying(false)}
-        className="w-full h-full object-contain cursor-pointer"
-        onClick={togglePlay}
-      />
+      {/* Mode A: Secure Bunny Stream Embed Player */}
+      {embedUrl ? (
+        <div className="relative w-full h-full">
+          <iframe
+            src={embedUrl}
+            loading="lazy"
+            className="w-full h-full border-0 absolute inset-0"
+            allow="accelerometer;gyroscope;autoplay;encrypted-media;picture-in-picture;"
+            allowFullScreen={true}
+          />
 
-      {/* Dynamic Drifting Email Watermark (stays in fullscreen) */}
-      <Watermark email={userEmail} containerRef={containerRef} />
+          {/* Dynamic Drifting Email Watermark (stays on top of video) */}
+          <Watermark email={userEmail} containerRef={containerRef} />
+        </div>
+      ) : (
+        /* Mode B: Custom Native HLS.js Player */
+        <>
+          <video
+            ref={videoRef}
+            playsInline
+            disablePictureInPicture
+            controlsList="nodownload noremoteplayback nofullscreen"
+            onTimeUpdate={handleTimeUpdate}
+            onPlay={() => setIsPlaying(true)}
+            onPause={() => setIsPlaying(false)}
+            className="w-full h-full object-contain cursor-pointer"
+            onClick={togglePlay}
+          />
+
+          {/* Dynamic Drifting Email Watermark */}
+          <Watermark email={userEmail} containerRef={containerRef} />
+
+          {/* Custom Player Controls Bar */}
+          <div className="absolute bottom-0 left-0 right-0 z-30 p-4 bg-gradient-to-t from-black/90 via-black/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col gap-2">
+            <input
+              type="range"
+              min="0"
+              max={duration || 100}
+              value={currentTime}
+              onChange={handleSeek}
+              className="w-full h-1.5 bg-white/20 rounded-lg appearance-none cursor-pointer accent-[#ffc107]"
+            />
+
+            <div className="flex items-center justify-between text-white text-xs">
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={togglePlay}
+                  className="p-1.5 hover:text-[#ffc107] transition-colors"
+                >
+                  {isPlaying ? <Pause className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4 fill-current" />}
+                </button>
+
+                <button
+                  onClick={toggleMute}
+                  className="p-1.5 hover:text-[#ffc107] transition-colors"
+                >
+                  {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+                </button>
+
+                <span className="font-mono text-[11px] text-slate-300">
+                  {formatTime(currentTime)} / {formatTime(duration)}
+                </span>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => saveProgress(currentTime, true)}
+                  className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors ${
+                    isMarkedCompleted
+                      ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
+                      : 'bg-white/10 hover:bg-[#ffc107] hover:text-black text-slate-200'
+                  }`}
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  <span>{isMarkedCompleted ? 'Completed' : 'Mark Watched'}</span>
+                </button>
+
+                {hasNextLesson && onNextLesson && (
+                  <button
+                    onClick={onNextLesson}
+                    className="btn-accent py-1 px-3 text-[11px] font-bold"
+                  >
+                    Next Lesson
+                  </button>
+                )}
+
+                <button
+                  onClick={toggleFullscreen}
+                  className="p-1.5 hover:text-[#ffc107] transition-colors"
+                  title="Toggle Fullscreen"
+                >
+                  {isFullscreen || isPseudoFullscreen ? (
+                    <Minimize className="w-4 h-4" />
+                  ) : (
+                    <Maximize className="w-4 h-4" />
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
 
       {/* Loading Overlay */}
       {loading && (
         <div className="absolute inset-0 z-40 bg-black/80 flex flex-col items-center justify-center gap-3 text-white">
           <div className="w-10 h-10 border-2 border-white/20 border-t-[#ffc107] rounded-full animate-spin" />
           <p className="text-xs font-semibold tracking-wider text-slate-300 uppercase">
-            Securing HLS Stream...
+            Securing Stream...
           </p>
         </div>
       )}
@@ -456,82 +509,6 @@ export function SecurePlayer({
           </button>
         </div>
       )}
-
-      {/* Custom Player Controls Bar */}
-      <div className="absolute bottom-0 left-0 right-0 z-30 p-4 bg-gradient-to-t from-black/90 via-black/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col gap-2">
-        {/* Progress Timeline Slider */}
-        <input
-          type="range"
-          min="0"
-          max={duration || 100}
-          value={currentTime}
-          onChange={handleSeek}
-          className="w-full h-1.5 bg-white/20 rounded-lg appearance-none cursor-pointer accent-[#ffc107]"
-        />
-
-        <div className="flex items-center justify-between text-white text-xs">
-          <div className="flex items-center gap-3">
-            {/* Play/Pause */}
-            <button
-              onClick={togglePlay}
-              className="p-1.5 hover:text-[#ffc107] transition-colors"
-            >
-              {isPlaying ? <Pause className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4 fill-current" />}
-            </button>
-
-            {/* Volume */}
-            <button
-              onClick={toggleMute}
-              className="p-1.5 hover:text-[#ffc107] transition-colors"
-            >
-              {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
-            </button>
-
-            {/* Time Indicator */}
-            <span className="font-mono text-[11px] text-slate-300">
-              {formatTime(currentTime)} / {formatTime(duration)}
-            </span>
-          </div>
-
-          <div className="flex items-center gap-3">
-            {/* Manual Mark Complete */}
-            <button
-              onClick={() => saveProgress(currentTime, true)}
-              className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors ${
-                isMarkedCompleted
-                  ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
-                  : 'bg-white/10 hover:bg-[#ffc107] hover:text-black text-slate-200'
-              }`}
-            >
-              <CheckCircle2 className="w-3.5 h-3.5" />
-              <span>{isMarkedCompleted ? 'Completed' : 'Mark Watched'}</span>
-            </button>
-
-            {/* Next Lesson shortcut if available */}
-            {hasNextLesson && onNextLesson && (
-              <button
-                onClick={onNextLesson}
-                className="btn-accent py-1 px-3 text-[11px] font-bold"
-              >
-                Next Lesson
-              </button>
-            )}
-
-            {/* Custom Container Fullscreen Toggle (keeps watermark) */}
-            <button
-              onClick={toggleFullscreen}
-              className="p-1.5 hover:text-[#ffc107] transition-colors"
-              title="Toggle Fullscreen"
-            >
-              {isFullscreen || isPseudoFullscreen ? (
-                <Minimize className="w-4 h-4" />
-              ) : (
-                <Maximize className="w-4 h-4" />
-              )}
-            </button>
-          </div>
-        </div>
-      </div>
     </div>
   )
 }
