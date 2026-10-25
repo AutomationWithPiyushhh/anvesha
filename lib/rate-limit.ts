@@ -7,8 +7,9 @@ export interface RateLimitResult {
 }
 
 /**
- * Serverless-compatible Rate Limiter using Supabase `rate_limits` table.
- * Avoids any in-memory state so it persists reliably across serverless instances without external Redis.
+ * Serverless-compatible Rate Limiter using atomic PostgreSQL function `increment_rate_limit`.
+ * Executes an atomic `INSERT ... ON CONFLICT (key) DO UPDATE ... RETURNING count, reset_at`,
+ * eliminating race conditions and avoiding any in-memory state.
  *
  * @param key Unique rate limit key (e.g., `video_token:${userId}`)
  * @param limit Maximum requests permitted in the window
@@ -20,54 +21,33 @@ export async function checkRateLimit(
   windowSeconds: number = 60
 ): Promise<RateLimitResult> {
   const adminClient = createAdminClient()
-  const now = new Date()
+  const fallbackReset = new Date(Date.now() + windowSeconds * 1000).toISOString()
 
-  const { data: record, error: fetchError } = await adminClient
-    .from('rate_limits')
-    .select('key, count, reset_at')
-    .eq('key', key)
-    .maybeSingle()
-
-  if (fetchError) {
-    // If rate limit check fails due to DB error, allow request but log quietly
-    return { success: true, remaining: 1, resetAt: now.toISOString() }
-  }
-
-  // If no record exists or window has expired, reset window
-  if (!record || now >= new Date(record.reset_at)) {
-    const resetAt = new Date(now.getTime() + windowSeconds * 1000).toISOString()
-    await adminClient.from('rate_limits').upsert({
-      key,
-      count: 1,
-      reset_at: resetAt,
+  try {
+    const { data, error } = await adminClient.rpc('increment_rate_limit', {
+      p_key: key,
+      p_window_seconds: windowSeconds,
     })
 
+    if (error || !data || data.length === 0) {
+      // In case RPC is not yet created during early testing, allow request
+      return { success: true, remaining: 1, resetAt: fallbackReset }
+    }
+
+    const row = data[0]
+    if (!row) {
+      return { success: true, remaining: 1, resetAt: fallbackReset }
+    }
+
+    const currentCount = row.current_count
+    const resetAt = row.reset_at
+
     return {
-      success: true,
-      remaining: limit - 1,
+      success: currentCount <= limit,
+      remaining: Math.max(0, limit - currentCount),
       resetAt,
     }
-  }
-
-  // Window is still active: check if limit reached
-  if (record.count >= limit) {
-    return {
-      success: false,
-      remaining: 0,
-      resetAt: record.reset_at,
-    }
-  }
-
-  // Increment count
-  const updatedCount = record.count + 1
-  await adminClient
-    .from('rate_limits')
-    .update({ count: updatedCount })
-    .eq('key', key)
-
-  return {
-    success: true,
-    remaining: Math.max(0, limit - updatedCount),
-    resetAt: record.reset_at,
+  } catch {
+    return { success: true, remaining: 1, resetAt: fallbackReset }
   }
 }

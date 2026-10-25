@@ -110,3 +110,31 @@ export async function registerDevice(
 
   return { success: true, deviceId }
 }
+
+/**
+ * Server action to register the current device for the signed-in user.
+ * Signs the user out if the 3rd device limit is exceeded.
+ */
+export async function registerCurrentDeviceAction(userAgent?: string | null): Promise<RegisterDeviceResult> {
+  const { createClient } = await import('@/lib/supabase/server')
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+
+  if (!user) {
+    return {
+      success: false,
+      error: 'INTERNAL_ERROR',
+      message: 'User is not authenticated.',
+    }
+  }
+
+  const result = await registerDevice(user.id, userAgent)
+
+  if (!result.success && result.error === 'DEVICE_LIMIT_REACHED') {
+    await supabase.auth.signOut()
+  }
+
+  return result
+}

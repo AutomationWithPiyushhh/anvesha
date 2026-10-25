@@ -48,7 +48,8 @@ create trigger on_auth_user_created
   after insert on auth.users
   for each row execute function public.handle_new_user();
 
--- Trigger to prevent students from changing their own role
+-- Trigger to protect profile role changes:
+-- Allows change when auth.uid() is null (SQL editor / service role) OR caller is admin, otherwise raises.
 create or replace function public.protect_profile_role()
 returns trigger
 language plpgsql
@@ -56,8 +57,10 @@ security definer
 set search_path = public
 as $$
 begin
-  if new.role is distinct from old.role and not public.is_admin() then
-    raise exception 'Permission denied: Only administrators can modify user roles.';
+  if new.role is distinct from old.role then
+    if auth.uid() is not null and not public.is_admin() then
+      raise exception 'Permission denied: Only administrators can modify user roles.';
+    end if;
   end if;
   return new;
 end;
@@ -87,7 +90,11 @@ create table public.videos (
   created_at timestamptz not null default now()
 );
 
--- 5. Student Videos View (hides bunny_video_id from browser clients)
+-- Security: Revoke all from anon and authenticated, grant select only on non-sensitive columns
+revoke all on public.videos from anon, authenticated;
+grant select (id, course_id, title, "order", duration, created_at) on public.videos to authenticated;
+
+-- 5. Student Videos View (security_invoker = true)
 create or replace view public.student_videos
 with (security_invoker = true)
 as
@@ -99,10 +106,6 @@ select
   v.duration,
   v.created_at
 from public.videos v;
-
--- Revoke direct select on bunny_video_id for authenticated & anon clients
-revoke select (bunny_video_id) on public.videos from authenticated, anon;
-grant select (id, course_id, title, "order", duration, created_at) on public.videos to authenticated;
 
 -- 6. Enrollments table
 create table public.enrollments (
@@ -139,6 +142,40 @@ create table public.rate_limits (
   count int not null default 1,
   reset_at timestamptz not null
 );
+
+-- Atomic PostgreSQL function for rate limiting
+create or replace function public.increment_rate_limit(
+  p_key text,
+  p_window_seconds int
+)
+returns table (
+  current_count int,
+  reset_at timestamptz
+)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_now timestamptz := now();
+  v_new_reset timestamptz := v_now + (p_window_seconds || ' seconds')::interval;
+begin
+  return query
+  insert into public.rate_limits (key, count, reset_at)
+  values (p_key, 1, v_new_reset)
+  on conflict (key) do update
+    set
+      count = case
+        when public.rate_limits.reset_at <= v_now then 1
+        else public.rate_limits.count + 1
+      end,
+      reset_at = case
+        when public.rate_limits.reset_at <= v_now then v_new_reset
+        else public.rate_limits.reset_at
+      end
+  returning public.rate_limits.count, public.rate_limits.reset_at;
+end;
+$$;
 
 -- ==============================================================================
 -- ROW LEVEL SECURITY (RLS) POLICIES
@@ -217,7 +254,8 @@ create policy "Admins can manage enrollments"
   using (public.is_admin());
 
 -- SESSIONS
--- Requirement: Students get SELECT only. All writes go through server routes via service-role client.
+-- Requirement: Students get SELECT only. No student INSERT/UPDATE policy lines.
+-- All writes (device registration, heartbeat, reset) go through server routes via service-role client.
 create policy "Students can select own sessions; admins select all"
   on public.sessions for select
   using (auth.uid() = user_id or public.is_admin());
@@ -227,25 +265,44 @@ create policy "Admins can manage sessions"
   using (public.is_admin());
 
 -- WATCH PROGRESS
+-- Requirement: Verify enrollment in the video's course on INSERT and UPDATE
 create policy "Students can read own progress; admins read all"
   on public.watch_progress for select
   using (auth.uid() = user_id or public.is_admin());
 
-create policy "Students can insert own progress"
+create policy "Students can insert own progress if enrolled"
   on public.watch_progress for insert
-  with check (auth.uid() = user_id or public.is_admin());
+  with check (
+    public.is_admin() or (
+      auth.uid() = user_id and
+      exists (
+        select 1 from public.videos v
+        join public.enrollments e on e.course_id = v.course_id
+        where v.id = public.watch_progress.video_id and e.user_id = auth.uid()
+      )
+    )
+  );
 
-create policy "Students can update own progress"
+create policy "Students can update own progress if enrolled"
   on public.watch_progress for update
-  using (auth.uid() = user_id or public.is_admin());
+  using (
+    public.is_admin() or (
+      auth.uid() = user_id and
+      exists (
+        select 1 from public.videos v
+        join public.enrollments e on e.course_id = v.course_id
+        where v.id = public.watch_progress.video_id and e.user_id = auth.uid()
+      )
+    )
+  );
 
 -- RATE LIMITS
-create policy "Admins can manage rate limits"
+create policy "Admins and service role manage rate limits"
   on public.rate_limits for all
   using (public.is_admin());
 
 -- ==============================================================================
 -- ADMIN SEED / PROMOTION SNIPPET
 -- ==============================================================================
--- After creating your account through /signup, promote yourself to admin with:
+-- Run this in the Supabase SQL editor after signing up your initial admin account:
 -- UPDATE public.profiles SET role = 'admin' WHERE email = 'your-email@domain.com';

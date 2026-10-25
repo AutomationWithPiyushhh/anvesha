@@ -241,6 +241,16 @@ export interface Database {
         Args: Record<PropertyKey, never>
         Returns: boolean
       }
+      increment_rate_limit: {
+        Args: {
+          p_key: string
+          p_window_seconds: number
+        }
+        Returns: {
+          current_count: number
+          reset_at: string
+        }[]
+      }
     }
     Enums: {
       [_ in never]: never
