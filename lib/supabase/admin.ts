@@ -1,5 +1,6 @@
 import { createClient as createSupabaseClient } from '@supabase/supabase-js'
 import { Database } from '@/types/database'
+import { getCleanSupabaseUrl } from '@/lib/supabase/config'
 
 /**
  * Service Role Client (Server-only).
@@ -11,7 +12,7 @@ export function createAdminClient() {
     throw new Error('createAdminClient must never be invoked on the client side.')
   }
 
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const supabaseUrl = getCleanSupabaseUrl()
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
 
   if (!supabaseUrl || !serviceRoleKey) {
