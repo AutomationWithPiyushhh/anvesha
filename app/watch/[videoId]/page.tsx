@@ -15,6 +15,9 @@ import {
   ShieldAlert,
 } from 'lucide-react'
 import { VideoWithProgress } from '@/types'
+import { LessonTabs } from '@/components/player/LessonTabs'
+import { getLessonResources } from '@/lib/resources/actions'
+import { getStudentNotes } from '@/lib/notes/actions'
 
 function formatDuration(seconds: number): string {
   if (!seconds || seconds <= 0) return '0:00'
@@ -136,6 +139,12 @@ export default async function WatchPage({
   const coursePercentage =
     totalLessons > 0 ? Math.round((completedLessons / totalLessons) * 100) : 0
 
+  // 6. Fetch resources & personal notes for this lesson
+  const [resources, notes] = await Promise.all([
+    getLessonResources(currentLesson.id),
+    getStudentNotes(currentLesson.id),
+  ])
+
   return (
     <div className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
       {/* Breadcrumb Navigation */}
@@ -223,6 +232,14 @@ export default async function WatchPage({
               )}
             </div>
           </div>
+
+          {/* Lesson Tabs: Personal Timestamped Notes & Attached Resources */}
+          <LessonTabs
+            videoId={currentLesson.id}
+            isAdmin={isAdmin}
+            initialResources={resources}
+            initialNotes={notes}
+          />
         </div>
 
         {/* Right: Lesson Playlist Sidebar */}

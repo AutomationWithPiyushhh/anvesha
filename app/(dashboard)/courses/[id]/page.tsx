@@ -5,7 +5,9 @@ import { getCurrentProfile } from '@/lib/auth/session'
 import { getCourseDetails } from '@/lib/courses/queries'
 import { LessonList } from '@/components/course/LessonList'
 import { ProgressBar } from '@/components/course/ProgressBar'
-import { ArrowLeft, Play, ShieldAlert, BookOpen, Clock, CheckCircle2 } from 'lucide-react'
+import { ClaimCertificateButton } from '@/components/certificate/ClaimCertificateButton'
+import { getCertificate } from '@/lib/certificates/actions'
+import { ArrowLeft, Play, ShieldAlert, BookOpen, Clock, CheckCircle2, Award } from 'lucide-react'
 
 export default async function CourseDetailPage({
   params,
@@ -19,7 +21,10 @@ export default async function CourseDetailPage({
     redirect('/login')
   }
 
-  const result = await getCourseDetails(courseId, profile.id)
+  const [result, existingCert] = await Promise.all([
+    getCourseDetails(courseId, profile.id),
+    getCertificate(courseId, profile.id),
+  ])
 
   if (!result) {
     notFound()
@@ -100,6 +105,25 @@ export default async function CourseDetailPage({
                 {course.completedLessons} completed
               </span>
             </div>
+
+            {/* Certificate Banner (100% Completed or Claimed) */}
+            {(course.progressPercentage === 100 || existingCert) && (
+              <div className="mb-6 p-4 rounded-2xl bg-amber-500/10 border border-amber-400/40 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900 flex items-center gap-1.5">
+                    <Award className="w-4 h-4 text-amber-600" />
+                    Verified Completion Certificate Unlocked!
+                  </h3>
+                  <p className="text-xs text-slate-600 mt-0.5">
+                    You have mastered all curriculum lessons. View or export your accredited certificate.
+                  </p>
+                </div>
+                <ClaimCertificateButton
+                  courseId={course.id}
+                  existingCertId={existingCert?.id}
+                />
+              </div>
+            )}
 
             {/* Action CTA */}
             {nextLesson && (

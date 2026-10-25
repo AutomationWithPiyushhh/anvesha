@@ -222,6 +222,99 @@ export interface Database {
         }
         Relationships: []
       }
+      lesson_resources: {
+        Row: {
+          id: string
+          video_id: string
+          title: string
+          url: string
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          video_id: string
+          title: string
+          url: string
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          video_id?: string
+          title?: string
+          url?: string
+          created_at?: string
+        }
+        Relationships: []
+      }
+      student_notes: {
+        Row: {
+          id: string
+          user_id: string
+          video_id: string
+          content: string
+          timestamp_seconds: number
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          video_id: string
+          content: string
+          timestamp_seconds?: number
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          video_id?: string
+          content?: string
+          timestamp_seconds?: number
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      certificates: {
+        Row: {
+          id: string
+          user_id: string
+          course_id: string
+          certificate_number: string
+          issued_at: string
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          course_id: string
+          certificate_number: string
+          issued_at?: string
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          course_id?: string
+          certificate_number?: string
+          issued_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "certificates_course_id_fkey"
+            columns: ["course_id"]
+            isOneToOne: false
+            referencedRelation: "courses"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "certificates_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          }
+        ]
+      }
     }
     Views: {
       student_videos: {

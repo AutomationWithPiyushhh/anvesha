@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { AdminVideoItem } from '@/lib/admin/queries'
 import { createLessonAction, updateLessonAction } from '@/lib/admin/actions'
-import { X, Plus, Edit2, Loader2, Key } from 'lucide-react'
+import { X, Plus, Edit2, Loader2, Key, UploadCloud, CheckCircle2 } from 'lucide-react'
 
 interface LessonModalProps {
   courseId: string
@@ -35,6 +35,44 @@ export function LessonModal({
   const [duration, setDuration] = useState<number>(lesson?.duration || 0)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [uploadingFile, setUploadingFile] = useState(false)
+  const [uploadStatus, setUploadStatus] = useState<string | null>(null)
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    setUploadingFile(true)
+    setUploadStatus('Uploading video directly to Bunny Stream...')
+    setError(null)
+
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+      formData.append('title', title || file.name)
+
+      const res = await fetch('/api/admin/video/upload', {
+        method: 'POST',
+        body: formData,
+      })
+
+      const data = await res.json()
+      if (!res.ok) {
+        throw new Error(data.error || 'Upload failed')
+      }
+
+      setBunnyVideoId(data.guid)
+      if (!title) {
+        setTitle(file.name.replace(/\.[^/.]+$/, ''))
+      }
+      setUploadStatus('Uploaded successfully! Bunny GUID linked.')
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Upload failed')
+      setUploadStatus(null)
+    } finally {
+      setUploadingFile(false)
+    }
+  }
 
   if (!isOpen) return null
 
@@ -118,6 +156,43 @@ export function LessonModal({
               placeholder="e.g. 01 - Understanding Distributed Consensus"
               className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 bg-white text-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-amber-400"
             />
+          </div>
+
+          {/* Direct File Upload to Bunny Stream */}
+          <div className="p-3.5 rounded-xl bg-amber-50/60 border border-amber-200/80 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                <UploadCloud className="w-4 h-4 text-amber-600" />
+                Direct Upload to Bunny Stream
+              </span>
+              {uploadStatus && (
+                <span className="text-[11px] font-semibold text-emerald-700 flex items-center gap-1">
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  Linked
+                </span>
+              )}
+            </div>
+
+            <p className="text-[11px] text-slate-600">
+              Select a video file (.mp4, .mov, .mkv) to upload directly to your Bunny Stream Library, or enter an existing GUID below.
+            </p>
+
+            <div className="flex items-center gap-2">
+              <input
+                type="file"
+                accept="video/*"
+                disabled={uploadingFile}
+                onChange={handleFileUpload}
+                className="text-xs text-slate-600 file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-amber-400 file:text-slate-900 hover:file:bg-amber-300 file:cursor-pointer cursor-pointer disabled:opacity-50"
+              />
+              {uploadingFile && (
+                <Loader2 className="w-4 h-4 text-amber-600 animate-spin shrink-0" />
+              )}
+            </div>
+
+            {uploadStatus && (
+              <p className="text-[11px] text-emerald-700 font-medium">{uploadStatus}</p>
+            )}
           </div>
 
           <div>
