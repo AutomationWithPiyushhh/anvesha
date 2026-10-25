@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import crypto from 'crypto'
+import { verifyRazorpaySignature } from '@/lib/payment/razorpay'
 import { getCurrentProfile } from '@/lib/auth/session'
 import { createAdminClient } from '@/lib/supabase/admin'
 
@@ -21,18 +21,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Missing payment verification parameters' }, { status: 400 })
     }
 
-    const keySecret = process.env.RAZORPAY_KEY_SECRET
-    if (!keySecret) {
-      return NextResponse.json({ error: 'Server payment configuration error' }, { status: 500 })
-    }
-
     // 1. Verify HMAC SHA256 Signature
-    const expectedSignature = crypto
-      .createHmac('sha256', keySecret)
-      .update(`${razorpay_order_id}|${razorpay_payment_id}`)
-      .digest('hex')
+    const isValid = verifyRazorpaySignature({
+      orderId: razorpay_order_id,
+      paymentId: razorpay_payment_id,
+      signature: razorpay_signature,
+    })
 
-    if (expectedSignature !== razorpay_signature) {
+    if (!isValid) {
       return NextResponse.json(
         { error: 'Payment signature verification failed. Please contact support.' },
         { status: 400 }

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { createRazorpayOrder } from '@/lib/payment/razorpay'
 import { getCurrentProfile } from '@/lib/auth/session'
 import { createAdminClient } from '@/lib/supabase/admin'
 
@@ -9,29 +10,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized: Please log in' }, { status: 401 })
     }
 
-    const { courseId } = await req.json()
-    if (!courseId) {
-      return NextResponse.json({ error: 'Course ID is required' }, { status: 400 })
-    }
-
-    const adminSupabase = createAdminClient()
-    const { data: courseRaw, error: courseError } = await adminSupabase
-      .from('courses')
-      .select('*')
-      .eq('id', courseId)
-      .single()
-
-    if (courseError || !courseRaw) {
-      return NextResponse.json({ error: 'Course not found' }, { status: 404 })
-    }
-
-    const course = courseRaw as { id: string; title: string; price_inr?: number }
-
-    if (typeof course.price_inr === 'number' && course.price_inr <= 0) {
-      return NextResponse.json({
-        configured: false,
-        error: 'This course is free. Please click "Claim Free Access" to enroll instantly.',
-      })
+    const { courseId, amount } = await req.json()
+    if (!courseId && !amount) {
+      return NextResponse.json({ error: 'Course ID or amount is required' }, { status: 400 })
     }
 
     const keyId = process.env.RAZORPAY_KEY_ID
@@ -40,50 +21,60 @@ export async function POST(req: NextRequest) {
     if (!keyId || !keySecret) {
       return NextResponse.json({
         configured: false,
-        error: 'Razorpay keys not configured in .env.local. Please use Manual UPI Request or add RAZORPAY_KEY_ID.',
+        error: 'Razorpay keys not configured. Please set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET in environment variables.',
       })
     }
 
-    // Amount in paise (1 INR = 100 paise). Default to 4999 if 0.
-    const amountInPaise = Math.max((course.price_inr || 4999) * 100, 100)
+    let finalAmountInPaise = 499900
+    let courseTitle = 'Engineering Track'
 
-    const basicAuth = Buffer.from(`${keyId}:${keySecret}`).toString('base64')
-    const orderRes = await fetch('https://api.razorpay.com/v1/orders', {
-      method: 'POST',
-      headers: {
-        Authorization: `Basic ${basicAuth}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        amount: amountInPaise,
-        currency: 'INR',
-        receipt: `anv_${profile.id.slice(0, 6)}_${course.id.slice(0, 6)}`,
-        notes: {
-          userId: profile.id,
-          userEmail: profile.email,
-          courseId: course.id,
-          courseTitle: course.title,
-        },
-      }),
-    })
+    if (courseId) {
+      const adminSupabase = createAdminClient()
+      const { data: courseRaw, error: courseError } = await adminSupabase
+        .from('courses')
+        .select('*')
+        .eq('id', courseId)
+        .single()
 
-    if (!orderRes.ok) {
-      const errText = await orderRes.text()
-      return NextResponse.json(
-        { error: `Razorpay Order Error: ${errText}` },
-        { status: orderRes.status }
-      )
+      if (courseError || !courseRaw) {
+        return NextResponse.json({ error: 'Course not found' }, { status: 404 })
+      }
+
+      const course = courseRaw as { id: string; title: string; price_inr?: number }
+      courseTitle = course.title
+
+      if (typeof course.price_inr === 'number' && course.price_inr <= 0) {
+        return NextResponse.json({
+          configured: false,
+          error: 'This course is free. Please click "Unlock Instant Free Access" to enroll instantly.',
+        })
+      }
+
+      finalAmountInPaise = Math.max((course.price_inr || 4999) * 100, 100)
+    } else if (amount) {
+      finalAmountInPaise = Math.max(Number(amount), 100)
     }
 
-    const orderData = await orderRes.json()
+    const order = await createRazorpayOrder({
+      amount: finalAmountInPaise,
+      currency: 'INR',
+      receipt: `anv_${profile.id.slice(0, 6)}_${(courseId || 'custom').slice(0, 6)}`,
+      notes: {
+        userId: profile.id,
+        userEmail: profile.email,
+        courseId: courseId || '',
+        courseTitle,
+      },
+    })
 
     return NextResponse.json({
       configured: true,
-      orderId: orderData.id,
-      amount: orderData.amount,
-      currency: orderData.currency,
+      order_id: order.order_id,
+      orderId: order.order_id,
+      amount: order.amount,
+      currency: order.currency,
       keyId,
-      courseTitle: course.title,
+      courseTitle,
       userName: profile.name,
       userEmail: profile.email,
     })

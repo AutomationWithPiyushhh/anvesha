@@ -193,6 +193,11 @@ export function EnrollmentCheckoutModal({
             setPaymentError('Failed to verify payment with server.')
           }
         },
+        modal: {
+          ondismiss: () => {
+            setPayingOnline(false)
+          },
+        },
       }
 
       const rzp = new RazorpayClass(options)
