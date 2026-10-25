@@ -16,6 +16,7 @@ import {
 } from 'lucide-react'
 import { VideoWithProgress } from '@/types'
 import { LessonTabs } from '@/components/player/LessonTabs'
+import { MarkCompletedButton } from '@/components/player/MarkCompletedButton'
 import { getLessonResources } from '@/lib/resources/actions'
 import { getStudentNotes } from '@/lib/notes/actions'
 
@@ -178,6 +179,7 @@ export default async function WatchPage({
             videoId={currentLesson.id}
             userEmail={profile.email}
             initialPositionSeconds={initialPositionSeconds}
+            initialCompleted={currentProgress?.completed ?? false}
             hasNextLesson={!!nextLesson}
           />
 
@@ -196,8 +198,8 @@ export default async function WatchPage({
               </h1>
             </div>
 
-            {/* Prev/Next Buttons */}
-            <div className="flex items-center gap-2 shrink-0">
+            {/* Prev / Mark Completed / Next Buttons */}
+            <div className="flex items-center gap-2.5 shrink-0 flex-wrap">
               {prevLesson ? (
                 <Link
                   href={`/watch/${prevLesson.id}`}
@@ -212,6 +214,12 @@ export default async function WatchPage({
                   <span className="hidden sm:inline">Prev</span>
                 </button>
               )}
+
+              {/* Mark Completed Button */}
+              <MarkCompletedButton
+                videoId={currentLesson.id}
+                initialCompleted={currentProgress?.completed ?? false}
+              />
 
               {nextLesson ? (
                 <Link

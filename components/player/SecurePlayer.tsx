@@ -19,6 +19,7 @@ interface SecurePlayerProps {
   videoId: string
   userEmail: string
   initialPositionSeconds?: number
+  initialCompleted?: boolean
   onCompleted?: () => void
   onNextLesson?: () => void
   hasNextLesson?: boolean
@@ -28,12 +29,14 @@ export function SecurePlayer({
   videoId,
   userEmail,
   initialPositionSeconds = 0,
+  initialCompleted = false,
   onCompleted,
   onNextLesson,
   hasNextLesson = false,
 }: SecurePlayerProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
+  const iframeRef = useRef<HTMLIFrameElement | null>(null)
   const hlsRef = useRef<Hls | null>(null)
 
   const [loading, setLoading] = useState(true)
@@ -47,7 +50,7 @@ export function SecurePlayer({
   const [isPseudoFullscreen, setIsPseudoFullscreen] = useState(false)
   const [playbackStartedAt, setPlaybackStartedAt] = useState<string | null>(null)
   const [stoppedReason, setStoppedReason] = useState<string | null>(null)
-  const [isMarkedCompleted, setIsMarkedCompleted] = useState(false)
+  const [isMarkedCompleted, setIsMarkedCompleted] = useState(initialCompleted)
 
   const lastSavedPosition = useRef(0)
   const hasResumedInitial = useRef(false)
@@ -261,6 +264,85 @@ export function SecurePlayer({
     return () => clearInterval(interval)
   }, [videoId, playbackStartedAt])
 
+  // Player.js integration for Bunny Stream Embed iframe
+  useEffect(() => {
+    if (!embedUrl) return
+
+    const handleMessage = (event: MessageEvent) => {
+      try {
+        let data = event.data
+        if (typeof data === 'string') {
+          try {
+            data = JSON.parse(data)
+          } catch {
+            return
+          }
+        }
+        if (!data || typeof data !== 'object') return
+
+        // 1. Ready event: register subscriptions for timeupdate, ended, play, pause
+        if (data.event === 'ready' || data.event === 'loadedmetadata') {
+          const win = iframeRef.current?.contentWindow
+          if (win) {
+            win.postMessage(JSON.stringify({ context: 'player.js', method: 'addEventListener', value: 'timeupdate' }), '*')
+            win.postMessage(JSON.stringify({ context: 'player.js', method: 'addEventListener', value: 'ended' }), '*')
+            win.postMessage(JSON.stringify({ context: 'player.js', method: 'addEventListener', value: 'play' }), '*')
+            win.postMessage(JSON.stringify({ context: 'player.js', method: 'addEventListener', value: 'pause' }), '*')
+          }
+        }
+
+        // 2. Playback progress update
+        if (data.event === 'timeupdate') {
+          const timing = data.value || data.data || data
+          const seconds = typeof timing.seconds === 'number' ? timing.seconds : (typeof timing.currentTime === 'number' ? timing.currentTime : 0)
+          const total = typeof timing.duration === 'number' ? timing.duration : 0
+
+          if (seconds > 0) {
+            setCurrentTime(seconds)
+            if (total > 0) setDuration(total)
+
+            // Save progress periodically every 8s
+            if (Math.abs(seconds - lastSavedPosition.current) >= 8) {
+              lastSavedPosition.current = seconds
+              saveProgress(seconds, isMarkedCompleted)
+            }
+
+            // Auto complete if >= 85% watched
+            if (total > 0 && seconds / total >= 0.85 && !isMarkedCompleted) {
+              saveProgress(seconds, true)
+            }
+          }
+        }
+
+        // 3. Video completed
+        if (data.event === 'ended') {
+          saveProgress(duration || 100, true)
+        }
+      } catch {
+        // Silently ignore unrelated window messages
+      }
+    }
+
+    window.addEventListener('message', handleMessage)
+
+    // Periodically send event subscriptions in the first 10 seconds to ensure iframe gets attached
+    const interval = setInterval(() => {
+      const win = iframeRef.current?.contentWindow
+      if (win) {
+        win.postMessage(JSON.stringify({ context: 'player.js', method: 'addEventListener', value: 'timeupdate' }), '*')
+        win.postMessage(JSON.stringify({ context: 'player.js', method: 'addEventListener', value: 'ended' }), '*')
+      }
+    }, 2000)
+
+    const timer = setTimeout(() => clearInterval(interval), 10000)
+
+    return () => {
+      window.removeEventListener('message', handleMessage)
+      clearInterval(interval)
+      clearTimeout(timer)
+    }
+  }, [embedUrl, isMarkedCompleted, duration, saveProgress])
+
   // Progress timeupdate handler for native player
   const handleTimeUpdate = () => {
     const video = videoRef.current
@@ -365,6 +447,7 @@ export function SecurePlayer({
       {embedUrl ? (
         <div className="relative w-full h-full">
           <iframe
+            ref={iframeRef}
             src={embedUrl}
             loading="lazy"
             referrerPolicy="no-referrer"

@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
 import { z } from 'zod'
 
 const progressSchema = z.object({
@@ -31,10 +32,45 @@ export async function POST(request: NextRequest) {
     }
 
     const { videoId, positionSeconds, completed } = parsed.data
+    const adminSupabase = createAdminClient()
 
-    // Upsert into watch_progress using the authenticated client.
-    // Note: Database RLS verifies that the user is actively enrolled in the course that owns videoId.
-    const { data, error: dbError } = await supabase
+    // 1. Verify video and enrollment
+    const { data: video } = await adminSupabase
+      .from('videos')
+      .select('course_id')
+      .eq('id', videoId)
+      .single()
+
+    if (!video) {
+      return NextResponse.json({ error: 'Video not found' }, { status: 404 })
+    }
+
+    const { data: profile } = await adminSupabase
+      .from('profiles')
+      .select('role')
+      .eq('id', user.id)
+      .single()
+
+    const isAdmin = profile?.role === 'admin'
+
+    if (!isAdmin) {
+      const { data: enrollment } = await adminSupabase
+        .from('enrollments')
+        .select('course_id')
+        .eq('user_id', user.id)
+        .eq('course_id', video.course_id)
+        .maybeSingle()
+
+      if (!enrollment) {
+        return NextResponse.json(
+          { error: 'Forbidden: You are not enrolled in this course' },
+          { status: 403 }
+        )
+      }
+    }
+
+    // 2. Perform upsert safely with admin client
+    const { data, error: dbError } = await adminSupabase
       .from('watch_progress')
       .upsert(
         {
@@ -53,8 +89,8 @@ export async function POST(request: NextRequest) {
 
     if (dbError) {
       return NextResponse.json(
-        { error: 'Failed to record watch progress. Verify course enrollment.' },
-        { status: 403 }
+        { error: `Database error: ${dbError.message}` },
+        { status: 500 }
       )
     }
 
@@ -62,9 +98,10 @@ export async function POST(request: NextRequest) {
       success: true,
       progress: data,
     })
-  } catch {
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : 'Internal error'
     return NextResponse.json(
-      { error: 'An unexpected error occurred while saving watch progress' },
+      { error: msg },
       { status: 500 }
     )
   }
